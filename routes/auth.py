@@ -11,7 +11,10 @@ from flask_jwt_extended import (
     jwt_required, 
     get_jwt_identity, 
     get_jwt,
-    decode_token # Added missing import
+    decode_token,
+    set_access_cookies,
+    unset_jwt_cookies,
+    set_refresh_cookies
 )
 
 auth_bp = Blueprint("auth", __name__)
@@ -59,6 +62,7 @@ def register():
     return jsonify({"message": "User registered successfully"}), 201
 
 
+
 @auth_bp.route("/login", methods=["POST"])
 @limiter.limit("5 per minute")
 def login():
@@ -76,10 +80,11 @@ def login():
 
     if user and verify_password(password, user.password_hash):
         identity = str(user.id)
+        response = jsonify({"message": "Login successful"})
         
         access_token = create_access_token(identity=identity)
         refresh_token = create_refresh_token(identity=identity)
-
+        
         jti = decode_token(refresh_token)["jti"]
 
         new_token = RefreshToken(
@@ -89,13 +94,14 @@ def login():
         )
         db.session.add(new_token)
         db.session.commit()
-
-        return jsonify({
-            "access_token": access_token,
-            "refresh_token": refresh_token
-        }), 200
+        
+        set_access_cookies(response, access_token)
+        set_refresh_cookies(response, refresh_token)
+        
+        return response, 200
 
     return jsonify({"error": "Invalid credentials"}), 401
+
 
 
 @auth_bp.route("/refresh", methods=["POST"])
@@ -107,13 +113,16 @@ def refresh():
     
     token_record = RefreshToken.query.filter_by(token=token_jti).first()
     
-    # Updated to timezone-aware UTC comparison
     if not token_record or token_record.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
         return jsonify({"error": "Refresh token is invalid or has been revoked"}), 401
 
     access_token = create_access_token(identity=identity)
-    return jsonify({"access_token": access_token}), 200
+    response = jsonify({"message": "Refresh request successful"})
+    set_access_cookies(response, access_token)
+    return response, 200
     
+    
+
 
 @auth_bp.route("/logout", methods=["POST"])
 @jwt_required(refresh=True)
@@ -125,5 +134,9 @@ def logout():
     if token:
         db.session.delete(token)
         db.session.commit()
+        
+    response = jsonify({"message": "Logged out successful"})
+    unset_jwt_cookies(response)
+    return response, 200
 
-    return jsonify({"message": "Logged out successfully"}), 200
+
